@@ -6,6 +6,7 @@ description = "CLI entry point for AstrBot RS"
 
 [dependencies]
 astrbot-core = { path = "../core" }
-tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros"] }
+astrbot-utils = { path = "../utils" }
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "signal"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

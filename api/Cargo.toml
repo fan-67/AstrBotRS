@@ -2,9 +2,25 @@
 name = "astrbot-api"
 version = "0.1.0"
 edition = "2024"
-description = "Web management API for AstrBot RS"
 
 [dependencies]
 astrbot-core = { path = "../core" }
 astrbot-utils = { path = "../utils" }
-tokio = { version = "1", features = ["sync"] }
+astrbot-config-mgr = { path = "../config_mgr" }
+astrbot-platform = { path = "../platform" }
+astrbot-provider = { path = "../provider" }
+astrbot-plugin = { path = "../plugin" }
+tokio = { version = "1", features = ["sync", "time"] }
+tracing = "0.1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+axum = { version = "0.8", features = ["macros"] }
+tower-http = { version = "0.6", features = ["cors"] }
+tower = "0.5"
+jsonwebtoken = "9"
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1", features = ["v4"] }
+futures = "0.3"
+async-stream = "0.3"
+rust-embed = { version = "8", features = ["mime-guess"] }
+mime_guess = "2"
