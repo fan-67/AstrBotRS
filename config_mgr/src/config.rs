@@ -11,9 +11,11 @@ pub struct DashboardConfig {
     pub host: String,
     #[serde(default = "default_port")]
     pub port: u16,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub username: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub password: Option<String>,
-    #[serde(default = "default_jwt_secret")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub jwt_secret: Option<String>,
 }
 
@@ -23,9 +25,6 @@ fn default_host() -> String {
 fn default_port() -> u16 {
     6185
 }
-fn default_jwt_secret() -> Option<String> {
-    None
-}
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ProviderConfig {
@@ -33,8 +32,11 @@ pub struct ProviderConfig {
     #[serde(rename = "type")]
     pub provider_type: String,
     pub enable: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub api_key: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub base_url: Option<String>,
 
     #[serde(flatten)]

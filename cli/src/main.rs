@@ -28,6 +28,18 @@ async fn main() {
         .await
         .expect("Failed to initialize AstrBot");
 
-    info!("AstrBotRS initialized. Starting...");
-    core.start().await.expect("Failed to start AstrBot");
+    // Start core in background
+    let core_handle = tokio::spawn(async move {
+        core.start().await.expect("Failed to start AstrBot");
+    });
+
+    // Wait for Ctrl+C
+    tokio::select! {
+        _ = tokio::signal::ctrl_c() => {
+            info!("Received Ctrl+C, shutting down...");
+        }
+        _ = core_handle => {}
+    }
+
+    info!("AstrBotRS stopped");
 }

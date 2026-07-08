@@ -17,14 +17,12 @@ async fn list_provider_instances(State(state): State<AppState>) -> impl IntoResp
     let instances: Vec<Value> = state
         .provider_mgr
         .list_providers()
+        .await
         .into_iter()
-        .map(|(_id, p)| {
-            let m = p.meta();
+        .map(|(id, ptype)| {
             serde_json::json!({
-                "id": m.id,
-                "model": m.model,
-                "type": m.provider_type,
-                "provider_kind": m.provider_kind.as_str(),
+                "id": id,
+                "provider_kind": ptype,
             })
         })
         .collect();

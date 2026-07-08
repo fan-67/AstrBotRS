@@ -1,45 +1,52 @@
 use std::collections::HashMap;
 
 use astrbot_utils::error::{AstrBotError, Result};
+use tokio::sync::RwLock;
 use tracing::info;
 
 use crate::traits::Provider;
 
 pub struct ProviderManager {
-    inst_map: HashMap<String, Box<dyn Provider>>,
-    default_provider_id: Option<String>,
+    inst_map: RwLock<HashMap<String, Box<dyn Provider>>>,
+    default_provider_id: RwLock<Option<String>>,
 }
 
 impl ProviderManager {
     pub fn new() -> Self {
         Self {
-            inst_map: HashMap::new(),
-            default_provider_id: None,
+            inst_map: RwLock::new(HashMap::new()),
+            default_provider_id: RwLock::new(None),
         }
     }
 
-    pub fn register(&mut self, id: String, provider: Box<dyn Provider>) {
+    pub async fn register(&self, id: String, provider: Box<dyn Provider>) {
         info!("Registering provider: {id}");
-        if self.default_provider_id.is_none() {
-            self.default_provider_id = Some(id.clone());
+        let mut map = self.inst_map.write().await;
+        if map.is_empty() {
+            *self.default_provider_id.write().await = Some(id.clone());
         }
-        self.inst_map.insert(id, provider);
+        map.insert(id, provider);
     }
 
-    pub fn get_using_provider(&self) -> Option<&dyn Provider> {
-        self.default_provider_id
-            .as_ref()
-            .and_then(|id| self.inst_map.get(id))
-            .map(|p| p.as_ref())
+    pub async fn get_using_provider(&self) -> Option<tokio::sync::RwLockReadGuard<'_, Box<dyn Provider>>> {
+        let id = { self.default_provider_id.read().await.clone() };
+        let id = id?;
+        tokio::sync::RwLockReadGuard::try_map(self.inst_map.read().await, |map| {
+            map.get(&id)
+        })
+        .ok()
     }
 
-    pub fn get_provider_by_id(&self, id: &str) -> Option<&dyn Provider> {
-        self.inst_map.get(id).map(|p| p.as_ref())
+    pub async fn get_provider_by_id(&self, id: &str) -> Option<tokio::sync::RwLockReadGuard<'_, Box<dyn Provider>>> {
+        tokio::sync::RwLockReadGuard::try_map(self.inst_map.read().await, |map| {
+            map.get(id)
+        })
+        .ok()
     }
 
-    pub fn set_default_provider(&mut self, id: &str) -> Result<()> {
-        if self.inst_map.contains_key(id) {
-            self.default_provider_id = Some(id.to_string());
+    pub async fn set_default_provider(&self, id: &str) -> Result<()> {
+        if self.inst_map.read().await.contains_key(id) {
+            *self.default_provider_id.write().await = Some(id.to_string());
             Ok(())
         } else {
             Err(AstrBotError::NotFound(format!(
@@ -48,26 +55,28 @@ impl ProviderManager {
         }
     }
 
-    pub fn list_providers(&self) -> Vec<(&str, &dyn Provider)> {
+    pub async fn list_providers(&self) -> Vec<(String, String)> {
         self.inst_map
-            .iter()
-            .map(|(id, p)| (id.as_str(), p.as_ref()))
+            .read()
+            .await.keys().map(|id| (id.clone(), "chat_completion".to_string()))
             .collect()
     }
 
-    pub fn remove(&mut self, id: &str) {
-        self.inst_map.remove(id);
-        if self.default_provider_id.as_deref() == Some(id) {
-            self.default_provider_id = self.inst_map.keys().next().cloned();
+    pub async fn remove(&self, id: &str) {
+        let mut map = self.inst_map.write().await;
+        map.remove(id);
+        let mut default = self.default_provider_id.write().await;
+        if default.as_deref() == Some(id) {
+            *default = map.keys().next().cloned();
         }
     }
 
-    pub fn is_empty(&self) -> bool {
-        self.inst_map.is_empty()
+    pub async fn len(&self) -> usize {
+        self.inst_map.read().await.len()
     }
 
-    pub fn len(&self) -> usize {
-        self.inst_map.len()
+    pub async fn is_empty(&self) -> bool {
+        self.inst_map.read().await.len() == 0
     }
 }
 

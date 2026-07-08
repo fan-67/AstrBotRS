@@ -15,6 +15,7 @@ pub struct AppState {
     pub log_broker: Arc<LogBroker>,
     pub config_path: String,
     pub config: Arc<RwLock<astrbot_config_mgr::AstrBotConfig>>,
+    pub jwt_secret: Arc<RwLock<String>>,
 }
 
 pub fn create_router(core: &CoreLifecycle) -> Router {
@@ -23,6 +24,7 @@ pub fn create_router(core: &CoreLifecycle) -> Router {
         log_broker: core.log_broker.clone(),
         config_path: core.config_path.clone(),
         config: core.config.clone(),
+        jwt_secret: core.jwt_secret.clone(),
     };
 
     let cors = CorsLayer::permissive();

@@ -1,7 +1,9 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use astrbot_db::Database;
 use astrbot_platform::manager::PlatformManager;
+use astrbot_platform::traits::Platform;
 use astrbot_provider::manager::ProviderManager;
 use astrbot_provider::sources::OpenAICompatProvider;
 use astrbot_utils::logging::LogBroker;
@@ -18,6 +20,7 @@ pub struct CoreLifecycle {
     pub config: Arc<RwLock<astrbot_config_mgr::AstrBotConfig>>,
     pub config_path: String,
     pub log_broker: Arc<LogBroker>,
+    pub jwt_secret: Arc<RwLock<String>>,
     pub event_tx: Option<mpsc::UnboundedSender<astrbot_platform::AstrMessageEvent>>,
     event_bus: Option<EventBus>,
 }
@@ -36,7 +39,7 @@ impl CoreLifecycle {
 
         let (event_tx, event_rx) = mpsc::unbounded_channel();
 
-        let mut provider_mgr = ProviderManager::new();
+        let provider_mgr = ProviderManager::new();
         for pc in &config.provider {
             if !pc.enable {
                 continue;
@@ -53,7 +56,7 @@ impl CoreLifecycle {
                         .clone()
                         .unwrap_or_else(|| "deepseek-chat".to_string());
                     let p = OpenAICompatProvider::new(&pc.id, base_url, api_key, model);
-                    provider_mgr.register(pc.id.clone(), Box::new(p));
+                    provider_mgr.register(pc.id.clone(), Box::new(p)).await;
                 }
                 t => info!("Unsupported provider type: {t}"),
             }
@@ -68,11 +71,33 @@ impl CoreLifecycle {
 
         let config = Arc::new(RwLock::new(config));
 
+        // Generate random JWT secret if not configured
+        let jwt_secret_str =
+            if let Some(ref s) = config.read().await.dashboard.jwt_secret {
+                s.clone()
+            } else {
+                let random: String = (0..32).map(|_| {
+                    let idx = fastrand::usize(..62);
+                    b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"[idx] as char
+                }).collect();
+                random
+            };
+        let jwt_secret = Arc::new(RwLock::new(jwt_secret_str));
+
+        // Build pipeline with all platforms indexed by id
         let pipeline = {
             let pfm = platform_mgr.lock().await;
-            pfm.platforms().first().cloned().map(|p| {
-                Pipeline::new(provider_mgr.clone(), p)
-            })
+            if pfm.is_empty() {
+                info!("No platforms enabled. Set `enable = true` for a platform in {config_path}");
+                None
+            } else {
+                let platforms: HashMap<String, Arc<dyn Platform>> = pfm
+                    .platforms()
+                    .iter()
+                    .map(|p| (p.meta().id.clone(), p.clone()))
+                    .collect();
+                Some(Pipeline::new(provider_mgr.clone(), platforms))
+            }
         };
 
         let event_bus = pipeline.map(|p| EventBus::new(event_rx, p));
@@ -84,13 +109,14 @@ impl CoreLifecycle {
             config,
             config_path: config_path.to_string(),
             log_broker,
+            jwt_secret,
             event_tx: Some(event_tx),
             event_bus,
         })
     }
 
     pub async fn start(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-        if let Some(mut event_bus) = self.event_bus.take() {
+        if let Some(event_bus) = self.event_bus.take() {
             let dispatch = tokio::spawn(async move { event_bus.dispatch().await });
 
             let handles: Vec<_> = {

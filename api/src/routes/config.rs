@@ -2,7 +2,6 @@ use axum::{extract::State, http::StatusCode, response::IntoResponse, Json, Route
 
 use crate::app::AppState;
 
-use astrbot_config_mgr::config::{DashboardConfig, PlatformConfig, ProviderConfig};
 
 async fn get_config(State(state): State<AppState>) -> impl IntoResponse {
     let config = state.config.read().await;
@@ -15,23 +14,24 @@ async fn update_config(
     Json(updates): Json<serde_json::Value>,
 ) -> impl IntoResponse {
     let result: Result<(), String> = async {
-        let mut config = state.config.write().await;
-        if let Some(d) = updates.get("dashboard") {
-            if let Ok(dc) = serde_json::from_value::<DashboardConfig>(d.clone()) {
-                config.dashboard = dc;
-            }
-        }
-        if let Some(p) = updates.get("provider") {
-            if let Ok(pc) = serde_json::from_value::<Vec<ProviderConfig>>(p.clone()) {
-                config.provider = pc;
-            }
-        }
-        if let Some(p) = updates.get("platform") {
-            if let Ok(pc) = serde_json::from_value::<Vec<PlatformConfig>>(p.clone()) {
-                config.platform = pc;
-            }
-        }
-        config.save(&state.config_path).map_err(|e| e.to_string())?;
+        // Clone config out of lock before saving
+        let updated = {
+            let mut config = state.config.write().await;
+            if let Some(d) = updates.get("dashboard")
+                && let Ok(dc) = serde_json::from_value(d.clone()) {
+                    config.dashboard = dc;
+                }
+            if let Some(p) = updates.get("provider")
+                && let Ok(pc) = serde_json::from_value(p.clone()) {
+                    config.provider = pc;
+                }
+            if let Some(p) = updates.get("platform")
+                && let Ok(pc) = serde_json::from_value(p.clone()) {
+                    config.platform = pc;
+                }
+            config.clone()
+        };
+        updated.save(&state.config_path).map_err(|e| e.to_string())?;
         Ok(())
     }
     .await;

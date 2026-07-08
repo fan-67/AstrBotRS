@@ -64,14 +64,13 @@ impl WeixinOCClient {
             "AuthorizationType",
             "ilink_bot_token".parse().unwrap(),
         );
-        if token_required {
-            if let Some(ref token) = self.token {
+        if token_required
+            && let Some(ref token) = self.token {
                 headers.insert(
                     reqwest::header::AUTHORIZATION,
                     format!("Bearer {token}").parse().unwrap(),
                 );
             }
-        }
         headers
     }
 
@@ -131,7 +130,7 @@ impl WeixinOCClient {
             .unwrap_or_else(|| self.build_cdn_upload_url(upload_param, file_key));
 
         let aes_key = hex::decode(aes_key_hex).map_err(|e| format!("hex decode: {e}"))?;
-        let encrypted = crypto::aes_ecb_encrypt(&aes_key, data);
+        let encrypted = crypto::aes_ecb_encrypt(&aes_key, data)?;
 
         debug!(
             "CDN upload: url={cdn_url} plain_size={} cipher_size={}",
@@ -195,7 +194,7 @@ impl WeixinOCClient {
         let encrypted = self.download_cdn_bytes(encrypted_query_param).await?;
         let key = crypto::parse_media_aes_key(aes_key_value)
             .map_err(|e| format!("parse aes key: {e}"))?;
-        Ok(crypto::aes_ecb_decrypt(&key, &encrypted))
+        crypto::aes_ecb_decrypt(&key, &encrypted)
     }
 
     fn build_cdn_upload_url(&self, upload_param: &str, file_key: &str) -> String {

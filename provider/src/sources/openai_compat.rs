@@ -22,8 +22,8 @@ struct ChatCompletionRequest {
 }
 
 #[derive(Debug, Deserialize)]
-#[allow(dead_code)]
 struct ChatCompletionResponse {
+    #[allow(dead_code)]
     id: String,
     #[serde(default)]
     choices: Vec<Choice>,
@@ -31,10 +31,8 @@ struct ChatCompletionResponse {
 }
 
 #[derive(Debug, Deserialize)]
-#[allow(dead_code)]
 struct Choice {
     message: Message,
-    finish_reason: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -56,11 +54,10 @@ struct Usage {
 pub struct OpenAICompatProvider {
     client: Client,
     base_url: String,
-    api_key: String,
+    authorization: String,
     model: String,
     provider_id: String,
     max_attempts: u32,
-    request_timeout: Duration,
 }
 
 impl OpenAICompatProvider {
@@ -71,33 +68,39 @@ impl OpenAICompatProvider {
         model: impl Into<String>,
     ) -> Self {
         let timeout = Duration::from_secs(60);
+        let authorization = format!("Bearer {}", api_key.into());
         Self {
             client: Client::builder()
                 .timeout(timeout)
                 .build()
                 .expect("Failed to build HTTP client"),
             base_url: base_url.into().trim_end_matches('/').to_string(),
-            api_key: api_key.into(),
+            authorization,
             model: model.into(),
             provider_id: provider_id.into(),
             max_attempts: 3,
-            request_timeout: timeout,
         }
     }
 
     fn build_messages(&self, req: &ProviderRequest) -> Vec<Value> {
         let mut messages: Vec<Value> = Vec::new();
 
-        if let Some(system_prompt) = &req.system_prompt {
-            if !system_prompt.is_empty() {
+        if let Some(system_prompt) = &req.system_prompt
+            && !system_prompt.is_empty() {
                 messages.push(json!({
                     "role": "system",
                     "content": system_prompt
                 }));
             }
-        }
 
-        messages.extend(req.contexts.clone());
+        // Validate context entries (skip non-objects)
+        for ctx in &req.contexts {
+            if ctx.is_object() {
+                messages.push(ctx.clone());
+            } else {
+                warn!("Skipping invalid context entry: {ctx}");
+            }
+        }
 
         if let Some(prompt) = &req.prompt {
             messages.push(json!({
@@ -134,7 +137,6 @@ impl Provider for OpenAICompatProvider {
         };
 
         let url = format!("{}/v1/chat/completions", self.base_url);
-
         let mut last_error = None;
 
         for attempt in 0..self.max_attempts {
@@ -147,18 +149,25 @@ impl Provider for OpenAICompatProvider {
             match self
                 .client
                 .post(&url)
-                .header("Authorization", format!("Bearer {}", self.api_key))
+                .header("Authorization", &self.authorization)
                 .header("Content-Type", "application/json")
                 .json(&request_body)
-                .timeout(self.request_timeout)
                 .send()
                 .await
             {
                 Ok(response) => {
-                    if !response.status().is_success() {
-                        let status = response.status();
+                    let status = response.status();
+                    // Don't retry client errors (4xx)
+                    if status.is_client_error() {
                         let body = response.text().await.unwrap_or_default();
-                        warn!("API error ({}): {} - {body}", status, url);
+                        error!("API client error ({}): {body}", status);
+                        return Err(crate::AstrBotError::Provider(format!(
+                            "API error {status}: {body}"
+                        )));
+                    }
+                    if !status.is_success() {
+                        let body = response.text().await.unwrap_or_default();
+                        warn!("API server error ({}): {body}", status);
                         last_error = Some(format!("HTTP {status}: {body}"));
                         continue;
                     }
@@ -171,24 +180,15 @@ impl Provider for OpenAICompatProvider {
                                     .content
                                     .unwrap_or_default();
 
-                                let cached = u64::from(
-                                    chat_resp
-                                        .usage
-                                        .as_ref()
-                                        .and_then(|u| u.cached_tokens)
-                                        .unwrap_or(0),
-                                );
-                                let prompt_total =
-                                    u64::from(chat_resp.usage.as_ref().map_or(0, |u| u.prompt_tokens));
-                                let output =
-                                    u64::from(chat_resp.usage.as_ref().map_or(0, |u| u.completion_tokens));
-
-                                let input_other = prompt_total.saturating_sub(cached);
-
-                                let usage = chat_resp.usage.map(|_| crate::entities::TokenUsage {
-                                    input_other: input_other as u32,
-                                    input_cached: cached as u32,
-                                    output: output as u32,
+                                let usage = chat_resp.usage.map(|u| {
+                                    let cached = u64::from(u.cached_tokens.unwrap_or(0));
+                                    let prompt_total = u64::from(u.prompt_tokens);
+                                    let output = u64::from(u.completion_tokens);
+                                    crate::entities::TokenUsage {
+                                        input_other: prompt_total.saturating_sub(cached) as u32,
+                                        input_cached: cached as u32,
+                                        output: output as u32,
+                                    }
                                 });
 
                                 return Ok(LLMResponse {

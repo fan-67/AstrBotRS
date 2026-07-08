@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum ProviderType {
     #[serde(rename = "chat_completion")]
     ChatCompletion,
@@ -35,6 +36,7 @@ pub struct ProviderMeta {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Default)]
 pub struct TokenUsage {
     pub input_other: u32,
     pub input_cached: u32,
@@ -42,24 +44,17 @@ pub struct TokenUsage {
 }
 
 impl TokenUsage {
-    pub fn total(&self) -> u32 {
-        self.input_other + self.input_cached + self.output
+    pub fn total(&self) -> u64 {
+        (self.input_other as u64)
+            .saturating_add(self.input_cached as u64)
+            .saturating_add(self.output as u64)
     }
 
-    pub fn input(&self) -> u32 {
-        self.input_other + self.input_cached
+    pub fn input(&self) -> u64 {
+        (self.input_other as u64).saturating_add(self.input_cached as u64)
     }
 }
 
-impl Default for TokenUsage {
-    fn default() -> Self {
-        Self {
-            input_other: 0,
-            input_cached: 0,
-            output: 0,
-        }
-    }
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LLMResponse {

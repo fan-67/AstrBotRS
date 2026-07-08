@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::message_chain::MessageChain;
+use crate::MessageChain;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum MessageType {
@@ -20,12 +20,17 @@ impl MessageType {
         }
     }
 
-    pub fn from_str(s: &str) -> Self {
+}
+
+impl std::str::FromStr for MessageType {
+    type Err = ();
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
         match s {
-            "friend" => MessageType::FriendMessage,
-            "group" => MessageType::GroupMessage,
-            "channel" => MessageType::ChannelMessage,
-            _ => MessageType::Unknown,
+            "friend" => Ok(MessageType::FriendMessage),
+            "group" => Ok(MessageType::GroupMessage),
+            "channel" => Ok(MessageType::ChannelMessage),
+            _ => Ok(MessageType::Unknown),
         }
     }
 }

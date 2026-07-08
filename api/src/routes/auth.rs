@@ -1,8 +1,10 @@
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use axum::{extract::State, http::StatusCode, response::IntoResponse, Json, Router};
 use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation};
 use serde::{Deserialize, Serialize};
+use tokio::sync::RwLock;
 
 use crate::app::AppState;
 
@@ -19,14 +21,12 @@ struct LoginRequest {
     password: String,
 }
 
-fn jwt_secret(state: &AppState) -> String {
-    state
-        .config
-        .blocking_read()
-        .dashboard
-        .jwt_secret
-        .clone()
-        .unwrap_or_else(|| "astrbot_default_secret_change_me".to_string())
+fn jwt_secret(state: &AppState) -> Arc<RwLock<String>> {
+    state.jwt_secret.clone()
+}
+
+async fn get_secret(state: &AppState) -> String {
+    jwt_secret(state).read().await.clone()
 }
 
 async fn login(
@@ -67,7 +67,7 @@ async fn login(
         iat: now,
     };
 
-    let secret = jwt_secret(&state);
+    let secret = get_secret(&state).await;
     match encode(
         &Header::default(),
         &claims,
@@ -92,7 +92,7 @@ async fn verify(State(state): State<AppState>, headers: axum::http::HeaderMap) -
         .unwrap_or("")
         .to_string();
 
-    let secret = jwt_secret(&state);
+    let secret = get_secret(&state).await;
     match decode::<Claims>(
         &token,
         &DecodingKey::from_secret(secret.as_bytes()),

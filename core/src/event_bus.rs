@@ -1,8 +1,8 @@
 use std::collections::HashSet;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use astrbot_platform::AstrMessageEvent;
-use tokio::sync::mpsc;
+use tokio::sync::{Mutex, mpsc};
 use tracing::info;
 
 use crate::pipeline::Pipeline;
@@ -22,7 +22,7 @@ impl EventBus {
         }
     }
 
-    pub async fn dispatch(&mut self) {
+    pub async fn dispatch(mut self) {
         while let Some(event) = self.rx.recv().await {
             let message_id = event.message_obj.message_id.clone();
             info!(
@@ -33,7 +33,7 @@ impl EventBus {
             );
 
             {
-                let mut pending = self.pending.lock().unwrap();
+                let mut pending = self.pending.lock().await;
                 if !pending.insert(message_id.clone()) {
                     continue;
                 }
@@ -44,8 +44,9 @@ impl EventBus {
             let mid = message_id.clone();
             tokio::spawn(async move {
                 pipeline.execute(event).await;
-                pending.lock().unwrap().remove(&mid);
+                pending.lock().await.remove(&mid);
             });
         }
+        info!("EventBus: dispatch loop ended");
     }
 }

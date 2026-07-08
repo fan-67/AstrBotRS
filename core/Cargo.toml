@@ -9,6 +9,7 @@ tokio = { version = "1", features = ["sync", "rt", "macros", "rt-multi-thread"] 
 async-trait = "0.1"
 thiserror = "2"
 tracing = "0.1"
+fastrand = "2"
 astrbot-utils = { path = "../utils" }
 astrbot-config-mgr = { path = "../config_mgr" }
 astrbot-db = { path = "../db" }

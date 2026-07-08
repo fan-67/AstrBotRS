@@ -24,6 +24,7 @@ pub struct WeixinOCAdapter {
     base_url: String,
     cdn_base_url: String,
     event_tx: mpsc::UnboundedSender<AstrMessageEvent>,
+    seen_message_ids: Mutex<std::collections::HashSet<String>>,
 }
 
 impl WeixinOCAdapter {
@@ -42,18 +43,8 @@ impl WeixinOCAdapter {
             base_url: base_url.into(),
             cdn_base_url: cdn_base_url.into(),
             event_tx,
+            seen_message_ids: Mutex::new(std::collections::HashSet::new()),
         }
-    }
-
-    fn client(&self) -> WeixinOCClient {
-        let token = self.state.lock().unwrap().token.clone();
-        WeixinOCClient::with_http(
-            self.http.clone(),
-            &self.base_url,
-            &self.cdn_base_url,
-            120_000,
-            token,
-        )
     }
 
     fn parse_message_item(item: &Value) -> Option<(String, String)> {
@@ -91,6 +82,24 @@ impl WeixinOCAdapter {
         };
 
         for msg in msg_list {
+            // Use server-provided msg_id for dedup
+            let server_msg_id = msg
+                .get("msg_id")
+                .or_else(|| msg.get("message_id"))
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+
+            let mut dedup = self.seen_message_ids.lock().unwrap();
+            if !dedup.insert(server_msg_id.clone()) {
+                continue;
+            }
+            // Prune old entries
+            if dedup.len() > 10000 {
+                dedup.clear();
+            }
+            drop(dedup);
+
             let from_user_id = msg
                 .pointer("/from_user_id")
                 .and_then(|v| v.as_str())
@@ -111,13 +120,12 @@ impl WeixinOCAdapter {
             for item in item_list {
                 if let Some((_kind, text)) = Self::parse_message_item(item) {
                     let session_id = from_user_id.to_string();
-                    let message_id = uuid::Uuid::new_v4().to_string();
 
                     let mut bot_msg = AstrBotMessage::new(
                         MessageType::FriendMessage,
                         &self.meta.id,
                         session_id,
-                        message_id,
+                        server_msg_id.clone(),
                         MessageMember::new(from_user_id),
                         text,
                     );
@@ -206,6 +214,17 @@ impl WeixinOCAdapter {
         }
     }
 
+    fn client(&self) -> WeixinOCClient {
+        let token = self.state.lock().unwrap().token.clone();
+        WeixinOCClient::with_http(
+            self.http.clone(),
+            &self.base_url,
+            &self.cdn_base_url,
+            120_000,
+            token,
+        )
+    }
+
     async fn sync_loop(&self) -> Result<(), String> {
         let mut sync_buf = String::new();
 
@@ -228,14 +247,14 @@ impl WeixinOCAdapter {
                 .await
             {
                 Ok(data) => {
-                    if let Some(new_buf) = data.get("sync_buf").and_then(|v| v.as_str()) {
-                        sync_buf = new_buf.to_string();
-                    }
-
-                    // Check for session timeout
+                    // Check for session timeout BEFORE updating sync_buf
                     let errcode = data.get("errcode").and_then(|v| v.as_i64()).unwrap_or(0);
                     if errcode == -14 {
                         return Err("session timeout".to_string());
+                    }
+                    // Only update sync_buf after successful check
+                    if let Some(new_buf) = data.get("sync_buf").and_then(|v| v.as_str()) {
+                        sync_buf = new_buf.to_string();
                     }
 
                     let messages = self.parse_sync_response(&data);
@@ -248,7 +267,7 @@ impl WeixinOCAdapter {
                     }
                 }
                 Err(e) => {
-                    if e.contains("-14") || e.contains("session") {
+                    if e.contains("-14") {
                         return Err(format!("session expired: {e}"));
                     }
                     error!("weixin_oc: sync error: {e}");
@@ -280,9 +299,7 @@ impl Platform for WeixinOCAdapter {
 
             info!("weixin_oc: starting sync loop");
             match self.sync_loop().await {
-                Ok(()) => {
-                    info!("weixin_oc: sync loop ended cleanly");
-                }
+                Ok(()) => info!("weixin_oc: sync loop ended cleanly"),
                 Err(e) => {
                     warn!("weixin_oc: sync loop ended: {e}, re-logging in...");
                     if let Ok(mut state) = self.state.lock() {
@@ -302,6 +319,7 @@ impl Platform for WeixinOCAdapter {
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let text = message.get_plain_text();
         if text.is_empty() {
+            warn!("weixin_oc: non-text message not yet supported, ignoring");
             return Ok(());
         }
 
@@ -334,7 +352,7 @@ impl Platform for WeixinOCAdapter {
                 None,
                 Some(payload),
                 true,
-                None,
+                Some(30_000),
             )
             .await
             .map_err(|e| format!("send message failed: {e}"))?;
