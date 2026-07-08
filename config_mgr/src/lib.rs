@@ -1,2 +1,3 @@
-// config_mgr crate
+pub mod config;
 
+pub use config::*;
