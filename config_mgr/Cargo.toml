@@ -7,6 +7,5 @@ description = "Configuration manager for AstrBot RS"
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 toml = "0.8"
-serde_json = "1"
 thiserror = "2"
 astrbot-utils = { path = "../utils" }

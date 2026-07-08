@@ -1,6 +1,7 @@
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
+use reqwest::Client as HttpClient;
 use serde_json::Value;
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
@@ -19,6 +20,7 @@ struct WeixinOCState {
 pub struct WeixinOCAdapter {
     meta: PlatformMetadata,
     state: Arc<Mutex<WeixinOCState>>,
+    http: HttpClient,
     base_url: String,
     cdn_base_url: String,
     event_tx: mpsc::UnboundedSender<AstrMessageEvent>,
@@ -36,6 +38,7 @@ impl WeixinOCAdapter {
         Self {
             meta: PlatformMetadata::new(&id, "weixin_oc", "个人微信"),
             state: Arc::new(Mutex::new(WeixinOCState { token })),
+            http: HttpClient::new(),
             base_url: base_url.into(),
             cdn_base_url: cdn_base_url.into(),
             event_tx,
@@ -43,13 +46,14 @@ impl WeixinOCAdapter {
     }
 
     fn client(&self) -> WeixinOCClient {
-        let token = self
-            .state
-            .lock()
-            .unwrap()
-            .token
-            .clone();
-        WeixinOCClient::new(&self.base_url, &self.cdn_base_url, 120_000, token)
+        let token = self.state.lock().unwrap().token.clone();
+        WeixinOCClient::with_http(
+            self.http.clone(),
+            &self.base_url,
+            &self.cdn_base_url,
+            120_000,
+            token,
+        )
     }
 
     fn parse_message_item(item: &Value) -> Option<(String, String)> {
@@ -202,7 +206,7 @@ impl WeixinOCAdapter {
         }
     }
 
-    async fn sync_loop(&self) {
+    async fn sync_loop(&self) -> Result<(), String> {
         let mut sync_buf = String::new();
 
         loop {
@@ -228,21 +232,24 @@ impl WeixinOCAdapter {
                         sync_buf = new_buf.to_string();
                     }
 
+                    // Check for session timeout
+                    let errcode = data.get("errcode").and_then(|v| v.as_i64()).unwrap_or(0);
+                    if errcode == -14 {
+                        return Err("session timeout".to_string());
+                    }
+
                     let messages = self.parse_sync_response(&data);
                     for msg in messages {
                         let session_id = msg.session_id.clone();
                         let event = AstrMessageEvent::new(msg, self.meta.clone(), session_id);
                         if self.event_tx.send(event).is_err() {
-                            error!("weixin_oc: event channel closed");
-                            return;
+                            return Err("event channel closed".to_string());
                         }
                     }
                 }
                 Err(e) => {
-                    let need_relogin = e.contains("errcode") || e.contains("-14");
-                    if need_relogin {
-                        warn!("weixin_oc: session expired, need re-login: {e}");
-                        return;
+                    if e.contains("-14") || e.contains("session") {
+                        return Err(format!("session expired: {e}"));
                     }
                     error!("weixin_oc: sync error: {e}");
                     tokio::time::sleep(std::time::Duration::from_secs(5)).await;
@@ -259,15 +266,33 @@ impl Platform for WeixinOCAdapter {
     }
 
     async fn run(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        if self.state.lock().unwrap().token.is_none() {
-            self.login()
-                .await
-                .map_err(|e| format!("weixin_oc login failed: {e}"))?;
-        }
+        loop {
+            if self.state.lock().unwrap().token.is_none() {
+                match self.login().await {
+                    Ok(()) => info!("weixin_oc: login successful"),
+                    Err(e) => {
+                        error!("weixin_oc: login failed: {e}, retrying in 10s");
+                        tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+                        continue;
+                    }
+                }
+            }
 
-        info!("weixin_oc: starting sync loop");
-        self.sync_loop().await;
-        Ok(())
+            info!("weixin_oc: starting sync loop");
+            match self.sync_loop().await {
+                Ok(()) => {
+                    info!("weixin_oc: sync loop ended cleanly");
+                }
+                Err(e) => {
+                    warn!("weixin_oc: sync loop ended: {e}, re-logging in...");
+                    if let Ok(mut state) = self.state.lock() {
+                        state.token = None;
+                    }
+                }
+            }
+
+            tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+        }
     }
 
     async fn send_message(
@@ -303,7 +328,14 @@ impl Platform for WeixinOCAdapter {
         });
 
         client
-            .request_json("POST", "ilink/bot/sendmessage", None, Some(payload), true, None)
+            .request_json(
+                "POST",
+                "ilink/bot/sendmessage",
+                None,
+                Some(payload),
+                true,
+                None,
+            )
             .await
             .map_err(|e| format!("send message failed: {e}"))?;
 

@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use async_trait::async_trait;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
@@ -57,7 +59,8 @@ pub struct OpenAICompatProvider {
     api_key: String,
     model: String,
     provider_id: String,
-    max_retries: u32,
+    max_attempts: u32,
+    request_timeout: Duration,
 }
 
 impl OpenAICompatProvider {
@@ -67,13 +70,18 @@ impl OpenAICompatProvider {
         api_key: impl Into<String>,
         model: impl Into<String>,
     ) -> Self {
+        let timeout = Duration::from_secs(60);
         Self {
-            client: Client::new(),
+            client: Client::builder()
+                .timeout(timeout)
+                .build()
+                .expect("Failed to build HTTP client"),
             base_url: base_url.into().trim_end_matches('/').to_string(),
             api_key: api_key.into(),
             model: model.into(),
             provider_id: provider_id.into(),
-            max_retries: 3,
+            max_attempts: 3,
+            request_timeout: timeout,
         }
     }
 
@@ -129,9 +137,9 @@ impl Provider for OpenAICompatProvider {
 
         let mut last_error = None;
 
-        for attempt in 0..self.max_retries {
+        for attempt in 0..self.max_attempts {
             if attempt > 0 {
-                let delay = std::time::Duration::from_millis(1000 * (1 << attempt));
+                let delay = Duration::from_millis(1000 * (1 << attempt));
                 tokio::time::sleep(delay).await;
                 debug!("Retry attempt {} for {}", attempt + 1, url);
             }
@@ -142,6 +150,7 @@ impl Provider for OpenAICompatProvider {
                 .header("Authorization", format!("Bearer {}", self.api_key))
                 .header("Content-Type", "application/json")
                 .json(&request_body)
+                .timeout(self.request_timeout)
                 .send()
                 .await
             {
@@ -162,10 +171,24 @@ impl Provider for OpenAICompatProvider {
                                     .content
                                     .unwrap_or_default();
 
-                                let usage = chat_resp.usage.map(|u| crate::entities::TokenUsage {
-                                    input_other: u.prompt_tokens - u.cached_tokens.unwrap_or(0),
-                                    input_cached: u.cached_tokens.unwrap_or(0),
-                                    output: u.completion_tokens,
+                                let cached = u64::from(
+                                    chat_resp
+                                        .usage
+                                        .as_ref()
+                                        .and_then(|u| u.cached_tokens)
+                                        .unwrap_or(0),
+                                );
+                                let prompt_total =
+                                    u64::from(chat_resp.usage.as_ref().map_or(0, |u| u.prompt_tokens));
+                                let output =
+                                    u64::from(chat_resp.usage.as_ref().map_or(0, |u| u.completion_tokens));
+
+                                let input_other = prompt_total.saturating_sub(cached);
+
+                                let usage = chat_resp.usage.map(|_| crate::entities::TokenUsage {
+                                    input_other: input_other as u32,
+                                    input_cached: cached as u32,
+                                    output: output as u32,
                                 });
 
                                 return Ok(LLMResponse {
@@ -184,13 +207,13 @@ impl Provider for OpenAICompatProvider {
                     }
                 }
                 Err(e) => {
-                    warn!("Request failed: {e}");
+                    warn!("Request attempt {}/{} failed: {e}", attempt + 1, self.max_attempts);
                     last_error = Some(format!("{e}"));
                 }
             }
         }
 
-        error!("All retries failed for {url}");
+        error!("All {max_attempts} attempts failed for {url}", max_attempts = self.max_attempts);
         Err(crate::AstrBotError::Provider(
             last_error.unwrap_or_else(|| "Unknown error".to_string()),
         ))

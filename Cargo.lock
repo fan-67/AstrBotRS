@@ -61,7 +61,6 @@ version = "0.1.0"
 dependencies = [
  "astrbot-utils",
  "serde",
- "serde_json",
  "thiserror",
  "toml",
 ]
@@ -106,7 +105,6 @@ dependencies = [
  "cipher",
  "generic-array",
  "hex",
- "md-5",
  "reqwest",
  "serde",
  "serde_json",

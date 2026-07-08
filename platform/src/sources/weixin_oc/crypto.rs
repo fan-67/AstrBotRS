@@ -1,4 +1,4 @@
-use aes::Aes256;
+use aes::{Aes128, Aes256};
 use cipher::{BlockDecrypt, BlockEncrypt, KeyInit};
 use generic_array::GenericArray;
 
@@ -63,8 +63,8 @@ pub fn parse_media_aes_key(aes_key_value: &str) -> Result<Vec<u8>, String> {
     ))
 }
 
-pub fn aes_ecb_encrypt(key: &[u8], data: &[u8]) -> Vec<u8> {
-    let cipher = Aes256::new(GenericArray::from_slice(key));
+fn aes_ecb_encrypt_impl<C: BlockEncrypt + KeyInit>(key: &[u8], data: &[u8]) -> Vec<u8> {
+    let cipher = C::new(GenericArray::from_slice(key));
     let padded = pkcs7_pad(data);
     let mut result = vec![0u8; padded.len()];
     for (chunk, out) in padded.chunks(16).zip(result.chunks_mut(16)) {
@@ -75,8 +75,8 @@ pub fn aes_ecb_encrypt(key: &[u8], data: &[u8]) -> Vec<u8> {
     result
 }
 
-pub fn aes_ecb_decrypt(key: &[u8], data: &[u8]) -> Vec<u8> {
-    let cipher = Aes256::new(GenericArray::from_slice(key));
+fn aes_ecb_decrypt_impl<C: BlockDecrypt + KeyInit>(key: &[u8], data: &[u8]) -> Vec<u8> {
+    let cipher = C::new(GenericArray::from_slice(key));
     let mut result = vec![0u8; data.len()];
     for (chunk, out) in data.chunks(16).zip(result.chunks_mut(16)) {
         let mut block = GenericArray::clone_from_slice(chunk);
@@ -84,4 +84,20 @@ pub fn aes_ecb_decrypt(key: &[u8], data: &[u8]) -> Vec<u8> {
         out.copy_from_slice(&block);
     }
     pkcs7_unpad(&result)
+}
+
+pub fn aes_ecb_encrypt(key: &[u8], data: &[u8]) -> Vec<u8> {
+    match key.len() {
+        16 => aes_ecb_encrypt_impl::<Aes128>(key, data),
+        32 => aes_ecb_encrypt_impl::<Aes256>(key, data),
+        other => panic!("unsupported AES key length: {other} (expected 16 or 32)"),
+    }
+}
+
+pub fn aes_ecb_decrypt(key: &[u8], data: &[u8]) -> Vec<u8> {
+    match key.len() {
+        16 => aes_ecb_decrypt_impl::<Aes128>(key, data),
+        32 => aes_ecb_decrypt_impl::<Aes256>(key, data),
+        other => panic!("unsupported AES key length: {other} (expected 16 or 32)"),
+    }
 }

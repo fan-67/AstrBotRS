@@ -29,7 +29,7 @@ impl Database {
         sqlx::query(
             r#"CREATE TABLE IF NOT EXISTS conversations (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                umo TEXT NOT NULL,
+                umo TEXT NOT NULL UNIQUE,
                 messages_json TEXT NOT NULL DEFAULT '[]',
                 created_at TEXT NOT NULL DEFAULT (datetime('now')),
                 updated_at TEXT NOT NULL DEFAULT (datetime('now'))
@@ -59,28 +59,15 @@ impl Database {
         umo: &str,
         messages_json: &str,
     ) -> Result<Conversation> {
-        match self.get_conversation(umo).await? {
-            Some(_) => {
-                sqlx::query(
-                    "UPDATE conversations SET messages_json = ?, updated_at = datetime('now') WHERE umo = ?",
-                )
-                .bind(messages_json)
-                .bind(umo)
-                .execute(&self.pool)
-                .await
-                .map_err(|e| AstrBotError::Database(format!("Update failed: {e}")))?;
-            }
-            None => {
-                sqlx::query(
-                    "INSERT INTO conversations (umo, messages_json) VALUES (?, ?)",
-                )
-                .bind(umo)
-                .bind(messages_json)
-                .execute(&self.pool)
-                .await
-                .map_err(|e| AstrBotError::Database(format!("Insert failed: {e}")))?;
-            }
-        }
+        sqlx::query(
+            "INSERT INTO conversations (umo, messages_json) VALUES (?, ?) \
+             ON CONFLICT(umo) DO UPDATE SET messages_json = excluded.messages_json, updated_at = datetime('now')",
+        )
+        .bind(umo)
+        .bind(messages_json)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| AstrBotError::Database(format!("Upsert failed: {e}")))?;
 
         self.get_conversation(umo)
             .await?

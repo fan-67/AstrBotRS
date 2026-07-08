@@ -30,6 +30,22 @@ impl WeixinOCClient {
         }
     }
 
+    pub fn with_http(
+        http: HttpClient,
+        base_url: impl Into<String>,
+        cdn_base_url: impl Into<String>,
+        api_timeout_ms: u64,
+        token: Option<String>,
+    ) -> Self {
+        Self {
+            base_url: base_url.into(),
+            cdn_base_url: cdn_base_url.into(),
+            api_timeout_ms,
+            token,
+            http,
+        }
+    }
+
     fn resolve_url(&self, endpoint: &str) -> String {
         format!(
             "{}/{}",
