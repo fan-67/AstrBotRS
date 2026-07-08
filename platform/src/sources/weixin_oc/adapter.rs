@@ -186,7 +186,7 @@ impl WeixinOCAdapter {
 
             let all_texts: Vec<String> = item_list
                 .iter()
-                .filter_map(|item| Self::parse_message_item(item))
+                .filter_map(Self::parse_message_item)
                 .map(|(_, text)| text)
                 .collect();
 
@@ -200,8 +200,8 @@ impl WeixinOCAdapter {
                     .and_then(|cache| cache.find_reply(session_key, ref_id).map(|m| m.text.clone()))
             });
 
-            if !combined_text.is_empty() {
-                if let Ok(mut cache) = self.cached_messages.lock() {
+            if !combined_text.is_empty()
+                && let Ok(mut cache) = self.cached_messages.lock() {
                     cache.add(
                         session_key.to_string(),
                         CachedMessage {
@@ -212,7 +212,6 @@ impl WeixinOCAdapter {
                         },
                     );
                 }
-            }
 
             for item in item_list {
                 if let Some((_kind, text)) = Self::parse_message_item(item) {
