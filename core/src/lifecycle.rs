@@ -53,10 +53,9 @@ impl CoreLifecycle {
             if let Some(ref s) = config.read().await.dashboard.jwt_secret {
                 s.clone()
             } else {
-                (0..32).map(|_| {
-                    let idx = fastrand::usize(..62);
-                    b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"[idx] as char
-                }).collect()
+                let mut buf = [0u8; 32];
+                getrandom::getrandom(&mut buf).expect("failed to get random bytes");
+                hex::encode(buf)
             };
         let jwt_secret = Arc::new(RwLock::new(jwt_secret_str));
 

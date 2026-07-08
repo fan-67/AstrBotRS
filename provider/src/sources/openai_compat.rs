@@ -68,13 +68,21 @@ impl OpenAICompatProvider {
         model: impl Into<String>,
     ) -> Self {
         let timeout = Duration::from_secs(60);
-        let authorization = format!("Bearer {}", api_key.into());
+        let api_key = api_key.into();
+        let authorization = format!("Bearer {api_key}");
+
+        let base_url = base_url.into().trim_end_matches('/').to_string();
+        // Validate URL to prevent SSRF
+        if let Err(e) = url::Url::parse(&base_url) {
+            panic!("Invalid provider base_url '{base_url}': {e}");
+        }
+
         Self {
             client: Client::builder()
                 .timeout(timeout)
                 .build()
                 .expect("Failed to build HTTP client"),
-            base_url: base_url.into().trim_end_matches('/').to_string(),
+            base_url,
             authorization,
             model: model.into(),
             provider_id: provider_id.into(),
@@ -132,7 +140,7 @@ impl Provider for OpenAICompatProvider {
             model: model.to_string(),
             messages,
             stream: false,
-            max_tokens: None,
+            max_tokens: Some(4096),
             temperature: None,
         };
 

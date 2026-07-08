@@ -4,13 +4,16 @@ use std::sync::Arc;
 use astrbot_core::lifecycle::CoreLifecycle;
 use astrbot_plugin::PluginManager;
 use astrbot_utils::logging::LogBroker;
-use axum::Router;
+use axum::{middleware, Router};
 use sqlx::SqlitePool;
 use tokio::sync::RwLock;
 use tower_http::cors::CorsLayer;
 
 use crate::frontend::FrontendService;
-use crate::routes::{auth, bots, config, conversations, logs, operations, plugins, providers, stats};
+use crate::middleware::auth::require_auth;
+use crate::routes::{
+    auth, bots, config, conversations, logs, operations, plugins, providers, stats,
+};
 
 #[derive(Clone)]
 pub struct AppState {
@@ -44,6 +47,7 @@ pub fn create_router(
     let frontend = FrontendService::new(dist_dir);
 
     let api_routes = Router::new()
+        .route_layer(middleware::from_fn_with_state(state.clone(), require_auth))
         .nest("/api/v1/auth", auth::routes())
         .nest("/api/v1/config", config::routes())
         .nest("/api/v1/bots", bots::routes())

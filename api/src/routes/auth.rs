@@ -1,5 +1,6 @@
+use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use axum::{extract::State, http::StatusCode, response::IntoResponse, Json, Router};
 use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation};
@@ -29,10 +30,43 @@ async fn get_secret(state: &AppState) -> String {
     jwt_secret(state).read().await.clone()
 }
 
+static LOGIN_ATTEMPTS: std::sync::LazyLock<std::sync::Mutex<HashMap<String, (u32, u64)>>> =
+    std::sync::LazyLock::new(Default::default);
+
+fn check_rate_limit(ip: &str) -> bool {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let mut attempts = LOGIN_ATTEMPTS.lock().unwrap();
+    let entry = attempts.entry(ip.to_string()).or_insert((0, now));
+    if now - entry.1 > 60 {
+        *entry = (1, now);
+        return true;
+    }
+    if entry.0 >= 5 {
+        return false;
+    }
+    entry.0 += 1;
+    true
+}
+
 async fn login(
     State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
     Json(req): Json<LoginRequest>,
 ) -> impl IntoResponse {
+    let ip = headers
+        .get("x-forwarded-for")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("unknown");
+    if !check_rate_limit(ip) {
+        return (
+            StatusCode::TOO_MANY_REQUESTS,
+            Json(serde_json::json!({"error": "too many login attempts, try again later"})),
+        );
+    }
+
     let (valid_username, valid_password) = {
         let config = state.config.read().await;
         (

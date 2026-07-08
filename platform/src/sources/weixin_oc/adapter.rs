@@ -149,7 +149,10 @@ impl WeixinOCAdapter {
                 continue;
             }
             if dedup.len() > 10000 {
-                dedup.clear();
+                // Remove oldest half to avoid replay flood
+                let remove_count = dedup.len() / 2;
+                let keys: Vec<String> = dedup.iter().take(remove_count).cloned().collect();
+                for k in keys { dedup.remove(&k); }
             }
             drop(dedup);
 
@@ -531,6 +534,7 @@ impl Platform for WeixinOCAdapter {
         let client = self.client();
         let mut item_list: Vec<Value> = Vec::new();
         let mut pending_text = String::new();
+        let mut temp_files: Vec<String> = Vec::new();
 
         for component in &message.chain {
             match component {
@@ -546,6 +550,7 @@ impl Platform for WeixinOCAdapter {
                             }));
                             pending_text.clear();
                         }
+                        temp_files.push(path.clone());
                         let media_item = self
                             .prepare_media_item(
                                 &client,
@@ -577,6 +582,7 @@ impl Platform for WeixinOCAdapter {
                     } else {
                         file.name.clone()
                     };
+                    temp_files.push(file.file.clone());
                     let media_item = self
                         .prepare_media_item(
                             &client,
@@ -597,6 +603,7 @@ impl Platform for WeixinOCAdapter {
                         }));
                         pending_text.clear();
                     }
+                    temp_files.push(record.file.clone());
                     let media_item = self
                         .prepare_media_item(
                             &client,
@@ -650,6 +657,13 @@ impl Platform for WeixinOCAdapter {
             )
             .await
             .map_err(|e| format!("send message failed: {e}"))?;
+
+        // Clean up temp media files
+        for f in &temp_files {
+            if std::path::Path::new(f).exists() {
+                let _ = std::fs::remove_file(f);
+            }
+        }
 
         info!("weixin_oc: sent message to {session_id}");
         Ok(())
