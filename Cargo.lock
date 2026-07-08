@@ -88,6 +88,7 @@ version = "0.1.0"
 dependencies = [
  "astrbot-utils",
  "async-trait",
+ "chrono",
  "serde",
  "serde_json",
  "thiserror",
