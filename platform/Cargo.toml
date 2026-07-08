@@ -17,6 +17,7 @@ cipher = "0.4"
 generic-array = "0.14"
 hex = "0.4"
 base64 = "0.22"
+md5 = "0.7"
 uuid = { version = "1", features = ["v4"] }
 tracing = "0.1"
 astrbot-utils = { path = "../utils" }

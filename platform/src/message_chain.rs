@@ -71,9 +71,41 @@ impl Reply {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct File {
+    pub name: String,
+    pub file: String,
+}
+
+impl File {
+    pub fn new(name: impl Into<String>, file: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            file: file.into(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Record {
+    pub file: String,
+    pub url: Option<String>,
+}
+
+impl Record {
+    pub fn new(file: impl Into<String>) -> Self {
+        Self {
+            file: file.into(),
+            url: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum MessageComponent {
     Plain(Plain),
     Image(Image),
+    File(File),
+    Record(Record),
     At(At),
     Reply(Reply),
 }

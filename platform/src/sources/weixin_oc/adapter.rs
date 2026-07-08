@@ -1,15 +1,18 @@
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
+use base64::Engine;
 use reqwest::Client as HttpClient;
 use serde_json::Value;
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
 
 use super::client::WeixinOCClient;
+use super::crypto;
 use crate::event::AstrMessageEvent;
 use crate::message::{AstrBotMessage, MessageMember, MessageType};
 use crate::message_chain::MessageChain;
+use crate::message_chain::MessageComponent;
 use crate::metadata::PlatformMetadata;
 use crate::traits::Platform;
 
@@ -276,6 +279,108 @@ impl WeixinOCAdapter {
             }
         }
     }
+
+    async fn prepare_media_item(
+        &self,
+        client: &WeixinOCClient,
+        user_id: &str,
+        file_path: &str,
+        upload_media_type: i64,
+        item_type: i64,
+        file_name: String,
+    ) -> Result<Value, Box<dyn std::error::Error + Send + Sync>> {
+        let data = std::fs::read(file_path)
+            .map_err(|e| format!("read media file {file_path} failed: {e}"))?;
+        let raw_size = data.len();
+        let raw_md5 = format!("{:x}", md5::compute(&data));
+        let file_key = uuid::Uuid::new_v4().to_string().replace("-", "");
+        let aes_key_bytes = uuid::Uuid::new_v4().into_bytes();
+        let aes_key_hex = hex::encode(aes_key_bytes);
+        let ciphertext_size = crypto::aes_padded_size(raw_size);
+
+        let getupload_payload = serde_json::json!({
+            "filekey": file_key,
+            "media_type": upload_media_type,
+            "to_user_id": user_id,
+            "rawsize": raw_size,
+            "rawfilemd5": raw_md5,
+            "filesize": ciphertext_size,
+            "no_need_thumb": true,
+            "aeskey": aes_key_hex,
+            "base_info": {
+                "channel_version": "astrbot"
+            }
+        });
+
+        let resp = client
+            .request_json(
+                "POST",
+                "ilink/bot/getuploadurl",
+                None,
+                Some(getupload_payload),
+                true,
+                Some(120_000),
+            )
+            .await
+            .map_err(|e| format!("getuploadurl failed: {e}"))?;
+
+        let upload_param = resp
+            .get("upload_param")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| "missing upload_param".to_string())?;
+        let upload_full_url = resp
+            .get("upload_full_url")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty());
+
+        let encrypt_query_param = client
+            .upload_to_cdn(
+                upload_full_url,
+                upload_param,
+                &file_key,
+                &aes_key_hex,
+                &data,
+            )
+            .await
+            .map_err(|e| format!("cdn upload failed: {e}"))?;
+
+        let aes_key_b64 =
+            base64::engine::general_purpose::STANDARD.encode(aes_key_hex.as_bytes());
+
+        let media_payload = serde_json::json!({
+            "encrypt_query_param": encrypt_query_param,
+            "aes_key": aes_key_b64,
+            "encrypt_type": 1,
+        });
+
+        let item = match item_type {
+            2 => serde_json::json!({
+                "type": 2,
+                "image_item": {
+                    "media": media_payload,
+                    "mid_size": ciphertext_size,
+                }
+            }),
+            3 => serde_json::json!({
+                "type": 3,
+                "voice_item": {
+                    "media": media_payload,
+                    "voice_size": ciphertext_size,
+                }
+            }),
+            4 => serde_json::json!({
+                "type": 4,
+                "file_item": {
+                    "media": media_payload,
+                    "file_name": file_name,
+                    "len": raw_size.to_string(),
+                }
+            }),
+            _ => return Err(format!("unsupported item type: {item_type}").into()),
+        };
+
+        Ok(item)
+    }
 }
 
 #[async_trait]
@@ -317,13 +422,103 @@ impl Platform for WeixinOCAdapter {
         session_id: &str,
         message: MessageChain,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        let text = message.get_plain_text();
-        if text.is_empty() {
-            warn!("weixin_oc: non-text message not yet supported, ignoring");
+        let client = self.client();
+        let mut item_list: Vec<Value> = Vec::new();
+        let mut pending_text = String::new();
+
+        for component in &message.chain {
+            match component {
+                MessageComponent::Plain(p) => {
+                    pending_text.push_str(&p.text);
+                }
+                MessageComponent::Image(img) => {
+                    if let Some(ref path) = img.path {
+                        if !pending_text.is_empty() {
+                            item_list.push(serde_json::json!({
+                                "type": 1,
+                                "text_item": { "text": pending_text }
+                            }));
+                            pending_text.clear();
+                        }
+                        let media_item = self
+                            .prepare_media_item(
+                                &client,
+                                session_id,
+                                path,
+                                1,
+                                2,
+                                String::new(),
+                            )
+                            .await?;
+                        item_list.push(media_item);
+                    } else {
+                        warn!("weixin_oc: image without path, skipping");
+                    }
+                }
+                MessageComponent::File(file) => {
+                    if !pending_text.is_empty() {
+                        item_list.push(serde_json::json!({
+                            "type": 1,
+                            "text_item": { "text": pending_text }
+                        }));
+                        pending_text.clear();
+                    }
+                    let file_name = if file.name.is_empty() {
+                        std::path::Path::new(&file.file)
+                            .file_name()
+                            .map(|n| n.to_string_lossy().to_string())
+                            .unwrap_or_else(|| "file".to_string())
+                    } else {
+                        file.name.clone()
+                    };
+                    let media_item = self
+                        .prepare_media_item(
+                            &client,
+                            session_id,
+                            &file.file,
+                            3,
+                            4,
+                            file_name,
+                        )
+                        .await?;
+                    item_list.push(media_item);
+                }
+                MessageComponent::Record(record) => {
+                    if !pending_text.is_empty() {
+                        item_list.push(serde_json::json!({
+                            "type": 1,
+                            "text_item": { "text": pending_text }
+                        }));
+                        pending_text.clear();
+                    }
+                    let media_item = self
+                        .prepare_media_item(
+                            &client,
+                            session_id,
+                            &record.file,
+                            1,
+                            3,
+                            String::new(),
+                        )
+                        .await?;
+                    item_list.push(media_item);
+                }
+                _ => {}
+            }
+        }
+
+        if !pending_text.is_empty() {
+            item_list.push(serde_json::json!({
+                "type": 1,
+                "text_item": { "text": pending_text }
+            }));
+        }
+
+        if item_list.is_empty() {
+            warn!("weixin_oc: no items to send, ignoring");
             return Ok(());
         }
 
-        let client = self.client();
         let payload = serde_json::json!({
             "base_info": {
                 "channel_version": "astrbot"
@@ -334,14 +529,7 @@ impl Platform for WeixinOCAdapter {
                 "client_id": uuid::Uuid::new_v4().to_string(),
                 "message_type": 2,
                 "message_state": 2,
-                "item_list": [
-                    {
-                        "type": 1,
-                        "text_item": {
-                            "text": text
-                        }
-                    }
-                ]
+                "item_list": item_list,
             }
         });
 

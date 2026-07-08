@@ -1,12 +1,13 @@
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use astrbot_core::lifecycle::CoreLifecycle;
-use astrbot_provider::manager::ProviderManager;
 use astrbot_utils::logging::LogBroker;
 use axum::Router;
 use tokio::sync::RwLock;
 use tower_http::cors::CorsLayer;
 
+use crate::frontend::FrontendService;
 use crate::routes::{auth, bots, config, logs, providers, stats};
 
 #[derive(Clone)]
@@ -18,7 +19,9 @@ pub struct AppState {
     pub jwt_secret: Arc<RwLock<String>>,
 }
 
-pub fn create_router(core: &CoreLifecycle) -> Router {
+use astrbot_provider::manager::ProviderManager;
+
+pub fn create_router(core: &CoreLifecycle, dist_dir: PathBuf) -> Router {
     let state = AppState {
         provider_mgr: core.provider_mgr.clone(),
         log_broker: core.log_broker.clone(),
@@ -28,8 +31,9 @@ pub fn create_router(core: &CoreLifecycle) -> Router {
     };
 
     let cors = CorsLayer::permissive();
+    let frontend = FrontendService::new(dist_dir);
 
-    Router::new()
+    let api_routes = Router::new()
         .nest("/api/v1/auth", auth::routes())
         .nest("/api/v1/config", config::routes())
         .nest("/api/v1/bots", bots::routes())
@@ -37,5 +41,9 @@ pub fn create_router(core: &CoreLifecycle) -> Router {
         .nest("/api/v1/logs", logs::routes())
         .nest("/api/v1/stats", stats::routes())
         .layer(cors)
-        .with_state(state)
+        .with_state(state);
+
+    Router::new()
+        .merge(api_routes)
+        .fallback_service(frontend.into_router())
 }
