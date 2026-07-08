@@ -1,7 +1,9 @@
 pub mod event;
+pub mod manager;
 pub mod message;
 pub mod message_chain;
 pub mod metadata;
+pub mod sources;
 pub mod traits;
 
 pub use event::AstrMessageEvent;
