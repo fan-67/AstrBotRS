@@ -1,0 +1,8 @@
+[package]
+name = "astrbot-plugin"
+version = "0.1.0"
+edition = "2024"
+description = "Plugin system for AstrBot RS"
+
+[dependencies]
+astrbot-utils = { path = "../utils" }

@@ -1,0 +1,13 @@
+[package]
+name = "astrbot-provider"
+version = "0.1.0"
+edition = "2024"
+description = "LLM provider system for AstrBot RS"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+async-trait = "0.1"
+thiserror = "2"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+astrbot-utils = { path = "../utils" }

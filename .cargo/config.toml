@@ -1,0 +1,4 @@
+# Build environment for astrbot_rs
+# Requires a working C compiler in PATH (gcc with sysroot)
+# CC=x86_64-linux-gnu-gcc-14 --sysroot=/tmp/toolchain
+# LD_LIBRARY_PATH must include /tmp/toolchain/usr/lib/x86_64-linux-gnu

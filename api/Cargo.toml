@@ -1,0 +1,10 @@
+[package]
+name = "astrbot-api"
+version = "0.1.0"
+edition = "2024"
+description = "Web management API for AstrBot RS"
+
+[dependencies]
+astrbot-core = { path = "../core" }
+astrbot-utils = { path = "../utils" }
+tokio = { version = "1", features = ["sync"] }

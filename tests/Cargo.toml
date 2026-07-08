@@ -1,0 +1,9 @@
+[package]
+name = "astrbot-tests"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+astrbot-core = { path = "../core" }
+astrbot-config-mgr = { path = "../config_mgr" }
+tokio = { version = "1", features = ["rt", "macros"] }
