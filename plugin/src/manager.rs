@@ -1,5 +1,6 @@
 use astrbot_platform::event::AstrMessageEvent;
 use astrbot_platform::message_chain::MessageChain;
+use astrbot_provider::entities::{LLMResponse, ProviderRequest};
 use tracing::info;
 
 use crate::traits::Plugin;
@@ -34,6 +35,54 @@ impl PluginManager {
             if let Err(e) = plugin.initialize().await {
                 tracing::error!("Plugin {} init failed: {e}", plugin.name());
             }
+        }
+    }
+
+    pub async fn terminate_all(&self) {
+        for plugin in &self.plugins {
+            if let Err(e) = plugin.terminate().await {
+                tracing::error!("Plugin {} terminate failed: {e}", plugin.name());
+            }
+        }
+    }
+
+    pub async fn dispatch_llm_request(&self, req: &ProviderRequest) -> Option<ProviderRequest> {
+        let mut current = req.clone();
+        for plugin in &self.plugins {
+            if let Some(modified) = plugin.on_llm_request(&current).await {
+                current = modified;
+            } else {
+                return None;
+            }
+        }
+        Some(current)
+    }
+
+    pub async fn dispatch_llm_response(
+        &self,
+        req: &ProviderRequest,
+        resp: &LLMResponse,
+    ) -> Option<LLMResponse> {
+        let mut current = resp.clone();
+        for plugin in &self.plugins {
+            if let Some(modified) = plugin.on_llm_response(req, &current).await {
+                current = modified;
+            } else {
+                return None;
+            }
+        }
+        Some(current)
+    }
+
+    pub async fn dispatch_bot_start(&self) {
+        for plugin in &self.plugins {
+            plugin.on_bot_start().await;
+        }
+    }
+
+    pub async fn dispatch_bot_stop(&self) {
+        for plugin in &self.plugins {
+            plugin.on_bot_stop().await;
         }
     }
 

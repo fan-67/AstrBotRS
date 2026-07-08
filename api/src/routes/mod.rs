@@ -1,6 +1,9 @@
 pub mod auth;
 pub mod bots;
 pub mod config;
+pub mod conversations;
 pub mod logs;
+pub mod operations;
+pub mod plugins;
 pub mod providers;
 pub mod stats;

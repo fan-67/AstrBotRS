@@ -39,29 +39,7 @@ impl CoreLifecycle {
 
         let (event_tx, event_rx) = mpsc::unbounded_channel();
 
-        let provider_mgr = ProviderManager::new();
-        for pc in &config.provider {
-            if !pc.enable {
-                continue;
-            }
-            match pc.provider_type.as_str() {
-                "openai_chat_completion" => {
-                    let api_key = pc.api_key.clone().unwrap_or_default();
-                    let base_url = pc
-                        .base_url
-                        .clone()
-                        .unwrap_or_else(|| "https://api.deepseek.com".to_string());
-                    let model = pc
-                        .model
-                        .clone()
-                        .unwrap_or_else(|| "deepseek-chat".to_string());
-                    let p = OpenAICompatProvider::new(&pc.id, base_url, api_key, model);
-                    provider_mgr.register(pc.id.clone(), Box::new(p)).await;
-                }
-                t => info!("Unsupported provider type: {t}"),
-            }
-        }
-        let provider_mgr = Arc::new(provider_mgr);
+        let provider_mgr = Self::build_providers(&config).await;
         info!("Providers initialized");
 
         let mut platform_mgr = PlatformManager::new(event_tx.clone());
@@ -71,24 +49,21 @@ impl CoreLifecycle {
 
         let config = Arc::new(RwLock::new(config));
 
-        // Generate random JWT secret if not configured
         let jwt_secret_str =
             if let Some(ref s) = config.read().await.dashboard.jwt_secret {
                 s.clone()
             } else {
-                let random: String = (0..32).map(|_| {
+                (0..32).map(|_| {
                     let idx = fastrand::usize(..62);
                     b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"[idx] as char
-                }).collect();
-                random
+                }).collect()
             };
         let jwt_secret = Arc::new(RwLock::new(jwt_secret_str));
 
-        // Build pipeline with all platforms indexed by id
         let pipeline = {
             let pfm = platform_mgr.lock().await;
             if pfm.is_empty() {
-                info!("No platforms enabled. Set `enable = true` for a platform in {config_path}");
+                info!("No platforms enabled in {config_path}");
                 None
             } else {
                 let platforms: HashMap<String, Arc<dyn Platform>> = pfm
@@ -115,41 +90,89 @@ impl CoreLifecycle {
         })
     }
 
+    async fn build_providers(config: &astrbot_config_mgr::AstrBotConfig) -> Arc<ProviderManager> {
+        let mgr = ProviderManager::new();
+        for pc in &config.provider {
+            if !pc.enable { continue; }
+            match pc.provider_type.as_str() {
+                "openai_chat_completion" => {
+                    let api_key = pc.api_key.clone().unwrap_or_default();
+                    let base_url = pc.base_url.clone()
+                        .unwrap_or_else(|| "https://api.deepseek.com".to_string());
+                    let model = pc.model.clone()
+                        .unwrap_or_else(|| "deepseek-chat".to_string());
+                    let p = OpenAICompatProvider::new(&pc.id, base_url, api_key, model);
+                    mgr.register(pc.id.clone(), Box::new(p)).await;
+                }
+                t => info!("Unsupported provider type: {t}"),
+            }
+        }
+        Arc::new(mgr)
+    }
+
+    pub async fn reload_config(&self) -> Result<(), Box<dyn std::error::Error>> {
+        let new_config = astrbot_config_mgr::AstrBotConfig::load(&self.config_path)
+            .map_err(|e| format!("Failed to reload config: {e}"))?;
+
+        // Update in-memory config
+        {
+            let mut w = self.config.write().await;
+            *w = new_config.clone();
+        }
+
+        // Rebuild providers (clear and reload)
+        self.provider_mgr.clear().await;
+        for pc in &new_config.provider {
+            if !pc.enable { continue; }
+            match pc.provider_type.as_str() {
+                "openai_chat_completion" => {
+                    let api_key = pc.api_key.clone().unwrap_or_default();
+                    let base_url = pc.base_url.clone()
+                        .unwrap_or_else(|| "https://api.deepseek.com".to_string());
+                    let model = pc.model.clone()
+                        .unwrap_or_else(|| "deepseek-chat".to_string());
+                    let p = OpenAICompatProvider::new(&pc.id, base_url, api_key, model);
+                    self.provider_mgr.register(pc.id.clone(), Box::new(p)).await;
+                }
+                t => info!("Unsupported provider type: {t}"),
+            }
+        }
+        info!("Providers reloaded from config");
+
+        // Rebuild platforms
+        {
+            let mut pfm = self.platform_mgr.lock().await;
+            let mut new_pfm = PlatformManager::new(
+                self.event_tx.clone().ok_or("event_tx not available")?,
+            );
+            new_pfm.load_from_config(&new_config.platform);
+            *pfm = new_pfm;
+            info!("Platforms reloaded from config (restart required)");
+        }
+
+        Ok(())
+    }
+
     pub async fn start(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         if let Some(event_bus) = self.event_bus.take() {
             let dispatch = tokio::spawn(async move { event_bus.dispatch().await });
 
             let handles: Vec<_> = {
                 let pfm = self.platform_mgr.lock().await;
-                pfm.platforms()
-                    .iter()
-                    .map(|p| {
-                        let plat = p.clone();
-                        tokio::spawn(async move {
-                            if let Err(e) = plat.run().await {
-                                tracing::error!("Platform: {e}");
-                            }
-                        })
+                pfm.platforms().iter().map(|p| {
+                    let plat = p.clone();
+                    tokio::spawn(async move {
+                        if let Err(e) = plat.run().await {
+                            tracing::error!("Platform: {e}");
+                        }
                     })
-                    .collect()
+                }).collect()
             };
 
             info!("AstrBot started ({} platform(s))", handles.len());
-            for h in handles {
-                let _ = h.await;
-            }
+            for h in handles { let _ = h.await; }
             let _ = dispatch.await;
         }
         Ok(())
-    }
-
-    pub async fn reload_config(&self) {
-        match astrbot_config_mgr::AstrBotConfig::load(&self.config_path) {
-            Ok(cfg) => {
-                let mut w = self.config.write().await;
-                *w = cfg;
-            }
-            Err(e) => tracing::error!("Failed to reload config: {e}"),
-        }
     }
 }

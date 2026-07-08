@@ -1,0 +1,7 @@
+services:
+  astrbot:
+    build: .
+    ports:
+      - "6185:6185"
+    volumes:
+      - ./data:/data

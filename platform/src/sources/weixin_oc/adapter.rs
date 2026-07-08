@@ -1,3 +1,4 @@
+use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
@@ -10,7 +11,7 @@ use tracing::{debug, error, info, warn};
 use super::client::WeixinOCClient;
 use super::crypto;
 use crate::event::AstrMessageEvent;
-use crate::message::{AstrBotMessage, MessageMember, MessageType};
+use crate::message::{AstrBotMessage, Group, MessageMember, MessageType};
 use crate::message_chain::MessageChain;
 use crate::message_chain::MessageComponent;
 use crate::metadata::PlatformMetadata;
@@ -18,6 +19,55 @@ use crate::traits::Platform;
 
 struct WeixinOCState {
     token: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+struct CachedMessage {
+    message_id: String,
+    sender_id: String,
+    text: String,
+    timestamp: i64,
+}
+
+struct RecentMessageCache {
+    sessions: HashMap<String, VecDeque<CachedMessage>>,
+    max_cache_size: usize,
+    max_sessions: usize,
+}
+
+impl RecentMessageCache {
+    fn new(max_cache_size: usize, max_sessions: usize) -> Self {
+        Self {
+            sessions: HashMap::new(),
+            max_cache_size,
+            max_sessions,
+        }
+    }
+
+    fn add(&mut self, session_id: String, msg: CachedMessage) {
+        let entry = self.sessions.entry(session_id).or_default();
+        if entry.len() >= self.max_cache_size {
+            entry.pop_front();
+        }
+        entry.push_back(msg);
+        self.prune_sessions();
+    }
+
+    fn find_reply(&self, session_id: &str, ref_msg_id: &str) -> Option<&CachedMessage> {
+        self.sessions
+            .get(session_id)?
+            .iter()
+            .find(|m| m.message_id == ref_msg_id)
+    }
+
+    fn prune_sessions(&mut self) {
+        if self.sessions.len() > self.max_sessions {
+            let mut pairs: Vec<_> = self.sessions.drain().collect();
+            pairs.sort_by_key(|(_, msgs)| msgs.back().map(|m| m.timestamp).unwrap_or(0));
+            pairs.truncate(self.max_sessions);
+            self.sessions = pairs.into_iter().collect();
+        }
+    }
 }
 
 pub struct WeixinOCAdapter {
@@ -28,6 +78,7 @@ pub struct WeixinOCAdapter {
     cdn_base_url: String,
     event_tx: mpsc::UnboundedSender<AstrMessageEvent>,
     seen_message_ids: Mutex<std::collections::HashSet<String>>,
+    cached_messages: Arc<Mutex<RecentMessageCache>>,
 }
 
 impl WeixinOCAdapter {
@@ -47,6 +98,7 @@ impl WeixinOCAdapter {
             cdn_base_url: cdn_base_url.into(),
             event_tx,
             seen_message_ids: Mutex::new(std::collections::HashSet::new()),
+            cached_messages: Arc::new(Mutex::new(RecentMessageCache::new(100, 500))),
         }
     }
 
@@ -85,7 +137,6 @@ impl WeixinOCAdapter {
         };
 
         for msg in msg_list {
-            // Use server-provided msg_id for dedup
             let server_msg_id = msg
                 .get("msg_id")
                 .or_else(|| msg.get("message_id"))
@@ -97,7 +148,6 @@ impl WeixinOCAdapter {
             if !dedup.insert(server_msg_id.clone()) {
                 continue;
             }
-            // Prune old entries
             if dedup.len() > 10000 {
                 dedup.clear();
             }
@@ -112,6 +162,17 @@ impl WeixinOCAdapter {
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
 
+            let group_id = msg
+                .get("from_group_id")
+                .or_else(|| msg.get("group_id"))
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty());
+
+            let ref_msg_id = msg.get("ref_msg").and_then(|v| {
+                v.as_str()
+                    .or_else(|| v.get("msg_id").and_then(|id| id.as_str()))
+            }).filter(|s| !s.is_empty());
+
             let item_list = msg
                 .pointer("/item_list")
                 .and_then(|v| v.as_array());
@@ -120,19 +181,64 @@ impl WeixinOCAdapter {
                 continue;
             };
 
+            let all_texts: Vec<String> = item_list
+                .iter()
+                .filter_map(|item| Self::parse_message_item(item))
+                .map(|(_, text)| text)
+                .collect();
+
+            let combined_text = all_texts.join(" ");
+            let session_key = group_id.unwrap_or(from_user_id);
+
+            let reply_context = ref_msg_id.and_then(|ref_id| {
+                self.cached_messages
+                    .lock()
+                    .ok()
+                    .and_then(|cache| cache.find_reply(session_key, ref_id).map(|m| m.text.clone()))
+            });
+
+            if !combined_text.is_empty() {
+                if let Ok(mut cache) = self.cached_messages.lock() {
+                    cache.add(
+                        session_key.to_string(),
+                        CachedMessage {
+                            message_id: server_msg_id.clone(),
+                            sender_id: from_user_id.to_string(),
+                            text: combined_text,
+                            timestamp: chrono::Utc::now().timestamp(),
+                        },
+                    );
+                }
+            }
+
             for item in item_list {
                 if let Some((_kind, text)) = Self::parse_message_item(item) {
-                    let session_id = from_user_id.to_string();
+                    let message_type = if group_id.is_some() {
+                        MessageType::GroupMessage
+                    } else {
+                        MessageType::FriendMessage
+                    };
+
+                    let final_text = if let Some(ref ctx) = reply_context {
+                        format!("[回复: {}] {}", ctx, text)
+                    } else {
+                        text
+                    };
 
                     let mut bot_msg = AstrBotMessage::new(
-                        MessageType::FriendMessage,
+                        message_type,
                         &self.meta.id,
-                        session_id,
+                        session_key.to_string(),
                         server_msg_id.clone(),
                         MessageMember::new(from_user_id),
-                        text,
+                        final_text,
                     );
                     bot_msg.sender.nickname = Some(from_nickname.to_string());
+
+                    if let Some(gid) = group_id {
+                        bot_msg.group = Some(Group::new(gid));
+                    }
+
                     messages.push(bot_msg);
                 }
             }

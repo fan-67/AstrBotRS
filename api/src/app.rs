@@ -2,13 +2,15 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use astrbot_core::lifecycle::CoreLifecycle;
+use astrbot_plugin::PluginManager;
 use astrbot_utils::logging::LogBroker;
 use axum::Router;
+use sqlx::SqlitePool;
 use tokio::sync::RwLock;
 use tower_http::cors::CorsLayer;
 
 use crate::frontend::FrontendService;
-use crate::routes::{auth, bots, config, logs, providers, stats};
+use crate::routes::{auth, bots, config, conversations, logs, operations, plugins, providers, stats};
 
 #[derive(Clone)]
 pub struct AppState {
@@ -17,17 +19,25 @@ pub struct AppState {
     pub config_path: String,
     pub config: Arc<RwLock<astrbot_config_mgr::AstrBotConfig>>,
     pub jwt_secret: Arc<RwLock<String>>,
+    pub db_pool: SqlitePool,
+    pub plugin_mgr: Arc<RwLock<PluginManager>>,
 }
 
 use astrbot_provider::manager::ProviderManager;
 
-pub fn create_router(core: &CoreLifecycle, dist_dir: PathBuf) -> Router {
+pub fn create_router(
+    core: &CoreLifecycle,
+    dist_dir: PathBuf,
+    plugin_mgr: Arc<RwLock<PluginManager>>,
+) -> Router {
     let state = AppState {
         provider_mgr: core.provider_mgr.clone(),
         log_broker: core.log_broker.clone(),
         config_path: core.config_path.clone(),
         config: core.config.clone(),
         jwt_secret: core.jwt_secret.clone(),
+        db_pool: core.db.pool().clone(),
+        plugin_mgr,
     };
 
     let cors = CorsLayer::permissive();
@@ -40,6 +50,9 @@ pub fn create_router(core: &CoreLifecycle, dist_dir: PathBuf) -> Router {
         .nest("/api/v1/providers", providers::routes())
         .nest("/api/v1/logs", logs::routes())
         .nest("/api/v1/stats", stats::routes())
+        .nest("/api/v1/conversations", conversations::routes())
+        .nest("/api/v1/plugins", plugins::routes())
+        .nest("/api/v1/operations", operations::routes())
         .layer(cors)
         .with_state(state);
 

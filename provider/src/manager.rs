@@ -78,6 +78,11 @@ impl ProviderManager {
     pub async fn is_empty(&self) -> bool {
         self.inst_map.read().await.len() == 0
     }
+
+    pub async fn clear(&self) {
+        self.inst_map.write().await.clear();
+        *self.default_provider_id.write().await = None;
+    }
 }
 
 impl Default for ProviderManager {

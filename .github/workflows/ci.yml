@@ -1,0 +1,28 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential libsqlite3-dev pkg-config
+
+      - name: Build
+        run: cargo build --release -p astrbot-cli
+
+      - name: Test
+        run: cargo test --test config_test --test provider_test --test pipeline_test
