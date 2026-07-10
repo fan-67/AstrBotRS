@@ -4,7 +4,6 @@ use std::sync::Arc;
 use astrbot_plugin::PluginManager;
 use astrbot_provider::manager::ProviderManager;
 use astrbot_utils::logging::LogBroker;
-use axum::Router;
 use sqlx::SqlitePool;
 use tokio::sync::RwLock;
 use tracing::info;

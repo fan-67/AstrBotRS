@@ -20,8 +20,5 @@ base64 = "0.22"
 md5 = "0.7"
 uuid = { version = "1", features = ["v4"] }
 tracing = "0.1"
-tokio-tungstenite = { version = "0.21", default-features = false, features = ["connect"] }
-futures-util = "0.3"
-url = "2"
 astrbot-utils = { path = "../utils" }
 astrbot-config-mgr = { path = "../config_mgr" }

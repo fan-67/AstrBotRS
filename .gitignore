@@ -6,3 +6,7 @@
 last_commit.patch
 build.done
 build2.log
+build*.bat
+run_build.bat
+build_img.*
+*.txt

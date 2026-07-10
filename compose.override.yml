@@ -1,4 +1,0 @@
-services:
-  astrbot:
-    ports:
-      - "6186:6185"

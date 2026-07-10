@@ -4,7 +4,6 @@ use tokio::sync::mpsc;
 use tracing::info;
 
 use crate::event::AstrMessageEvent;
-use crate::sources::ecs_bridge::EcsBridgeAdapter;
 use crate::sources::weixin_oc::WeixinOCAdapter;
 use crate::traits::Platform;
 
@@ -57,15 +56,6 @@ impl PlatformManager {
                         token,
                         self.event_tx.clone(),
                     );
-                    self.add(Arc::new(adapter));
-                }
-                "ecs_bridge" => {
-                    let ws_url = cfg
-                        .extra
-                        .get("ws_url")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("ws://127.0.0.1:9500/ws");
-                    let adapter = EcsBridgeAdapter::new(&cfg.id, ws_url, self.event_tx.clone());
                     self.add(Arc::new(adapter));
                 }
                 t => {
