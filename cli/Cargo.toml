@@ -1,0 +1,13 @@
+[package]
+name = "astrbot-cli"
+version = "0.1.0"
+edition = "2024"
+description = "CLI entry point for AstrBot RS"
+
+[dependencies]
+astrbot-api = { path = "../api" }
+astrbot-core = { path = "../core" }
+astrbot-utils = { path = "../utils" }
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "signal"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }

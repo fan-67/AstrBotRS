@@ -1,0 +1,8 @@
+/target
+/data
+*.tar
+*.tar.gz
+*.log
+last_commit.patch
+build.done
+build2.log

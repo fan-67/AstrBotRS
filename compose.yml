@@ -1,0 +1,14 @@
+services:
+  astrbot:
+    build: .
+    ports:
+      - "6185:6185"
+    volumes:
+      - ./data:/data
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+    environment:
+      - ASTRBOT_CONFIG=/data/config.toml
+      - ASTRBOT_DB=/data/astrbot.db
+      - RUST_LOG=info

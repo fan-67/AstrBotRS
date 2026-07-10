@@ -1,0 +1,14 @@
+[workspace]
+resolver = "3"
+members = [
+    "core",
+    "platform",
+    "provider",
+    "db",
+    "config_mgr",
+    "plugin",
+    "api",
+    "utils",
+    "cli",
+    "tests",
+]
